@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+.env*
+!.env.example
+*.log
+
+# Local portal accounts (contains password hashes) — never commit.
+local-users.json
+
+# Freebuff internal files
+.freebuff/
