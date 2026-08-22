@@ -32,9 +32,14 @@ function cleanPathname(nextUrl: URL): URL {
 export default async function middleware(req: NextRequest) {
   const nextUrl = cleanPathname(req.nextUrl);
 
+  // Force secureCookie: true because behind iisnode/IIS, Node sees plain HTTP
+  // even though the external URL is HTTPS. Without this, getToken() looks for
+  // "authjs.session-token" while auth() (which uses AUTH_URL=https://...) sets
+  // "__Secure-authjs.session-token" — a name mismatch that causes a redirect loop.
   const token = await getToken({
     req,
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+    secureCookie: true,
   });
 
   // API routes: 401 JSON if not authenticated.
