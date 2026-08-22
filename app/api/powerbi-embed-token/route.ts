@@ -1,80 +1,51 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { getToken } from "next-auth/jwt";
 import { canAccess } from "@/lib/access";
 
 /**
  * POST /api/powerbi-embed-token
  * ------------------------------------------------------------------
- * Generates a short-lived Power BI "embed for your customers" token
- * (App Owns Data) using an Azure AD service principal. The frontend
- * never sees the service principal secret — only the resulting
- * embedUrl + embedToken, which expire after ~60 minutes.
+ * Generates a Power BI embed token using the signed-in user's own
+ * OAuth refresh token (delegated access). This avoids needing
+ * service-principal Application permissions, which Power BI doesn't
+ * expose for Dataset.Read.All.
  *
- * Two independent auth layers (never mixed):
- *   - The logged-in user (via the Auth.js session) is passed to Power BI
- *     as the embed token's *effective identity* when the dataset uses
- *     row-level security / an on-prem gateway (see POWERBI_RLS_ROLES).
- *   - The backend authenticates as the service principal for all Power BI
- *     REST API calls.
- *
- * One-time setup (do this in Azure / Power BI, not in code):
- *   1. Azure Portal → App registrations → New registration.
- *      Note the Application (client) ID and Directory (tenant) ID.
- *   2. Certificates & secrets → New client secret. Note the value —
- *      you only see it once.
- *   3. In the Power BI Admin Portal → Tenant settings → "Allow
- *      service principals to use Power BI APIs" → enable it for a
- *      security group that contains this app registration.
- *   4. In the Power BI workspace that holds the report → Access →
- *      add the app registration (service principal) as a Member
- *      or Admin.
- *   5. Set the environment variables below (e.g. in .env.local — see
- *      .env.example). Never commit real secrets.
- *
- * Required env vars:
- *   POWERBI_TENANT_ID
- *   POWERBI_CLIENT_ID
- *   POWERBI_CLIENT_SECRET
- *   POWERBI_WORKSPACE_ID   (the Fabric/Power BI workspace GUID)
- *   POWERBI_REPORT_ID      (the report GUID to embed)
- *
- * Optional env vars:
- *   POWERBI_RLS_ROLES      comma-separated RLS role names defined on the
- *                          dataset (e.g. "Manager,Sales"). Required when
- *                          the dataset demands an effective identity.
+ * The user's refresh token (stored in the JWT) is redeemed for a
+ * Power BI scoped access token, which is then used to fetch report
+ * metadata and generate the embed token. RLS is enforced via
+ * effectiveIdentity.
  * ------------------------------------------------------------------
  */
 
-const AAD_TOKEN_SCOPE = "https://analysis.windows.net/powerbi/api/.default";
+const POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/Dataset.Read.All";
 const POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg";
 
-async function getServicePrincipalAccessToken() {
-  const tenantId = process.env.POWERBI_TENANT_ID;
-  const clientId = process.env.POWERBI_CLIENT_ID;
-  const clientSecret = process.env.POWERBI_CLIENT_SECRET;
+/** Exchange the user's refresh token for a Power BI scoped access token. */
+async function getUserPowerBIToken(refreshToken: string): Promise<string> {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
 
   if (!tenantId || !clientId || !clientSecret) {
-    throw new Error(
-      "Missing POWERBI_TENANT_ID / POWERBI_CLIENT_ID / POWERBI_CLIENT_SECRET env vars."
-    );
+    throw new Error("Missing AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET env vars.");
   }
-
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: AAD_TOKEN_SCOPE,
-  });
 
   const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      scope: POWERBI_SCOPE,
+    }),
   });
 
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`AAD token request failed (${res.status}): ${detail}`);
+    throw new Error(`Power BI token refresh failed (${res.status}): ${detail}`);
   }
 
   const json = (await res.json()) as { access_token: string };
@@ -83,6 +54,20 @@ async function getServicePrincipalAccessToken() {
 
 export async function POST(request: Request) {
   try {
+    const session = await auth();
+
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Access control: analytics embeds require at least analyst level.
+    if (!canAccess(session.user.accessLevel, "analyst")) {
+      return NextResponse.json(
+        { error: "Forbidden — your access level cannot view analytics." },
+        { status: 403 }
+      );
+    }
+
     const { workspaceId, reportId } = (await request.json().catch(() => ({}))) as {
       workspaceId?: string;
       reportId?: string;
@@ -98,7 +83,24 @@ export async function POST(request: Request) {
       );
     }
 
-    const aadToken = await getServicePrincipalAccessToken();
+    // Get the raw JWT to access the refresh token (not exposed in session).
+    const token = await getToken({
+      req: request as any,
+      secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+      secureCookie: true,
+    });
+
+    const refreshToken = (token as any)?.refreshToken;
+
+    if (!refreshToken) {
+      return NextResponse.json(
+        { error: "No refresh token available. Please sign in again." },
+        { status: 401 }
+      );
+    }
+
+    // Exchange refresh token for Power BI scoped access token.
+    const aadToken = await getUserPowerBIToken(refreshToken);
 
     // Fetch report metadata (gives us the embedUrl + datasetId).
     const reportRes = await fetch(
@@ -114,43 +116,24 @@ export async function POST(request: Request) {
     }
     const report = (await reportRes.json()) as { embedUrl: string; datasetId: string; id: string };
 
-    // Access control: analytics embeds require at least analyst level.
-    // Microsoft Entra sessions (no access level) keep full access.
-    const session = await auth();
-    if (!canAccess(session?.user?.accessLevel, "analyst")) {
-      return NextResponse.json(
-        { error: "Forbidden — your access level cannot view analytics." },
-        { status: 403 }
-      );
-    }
-
-    // Effective identity: datasets that use row-level security (or an
-    // on-prem gateway) require the token to impersonate a user with the
-    // dataset's RLS roles. We use the signed-in portal user (their UPN)
-    // so Power BI applies that user's own RLS filtering.
+    // Effective identity for RLS.
     const rlsRoles = (process.env.POWERBI_RLS_ROLES ?? "")
       .split(",")
       .map((role) => role.trim())
       .filter(Boolean);
     const userIdentity =
-      rlsRoles.length > 0 && session?.user
+      rlsRoles.length > 0
         ? {
             username:
               session.user.email ?? session.user.preferredUsername ?? session.user.name ?? "",
             datasets: [report.datasetId],
-            // Pick the role matching THIS user (email local-part or given
-            // name, case-insensitive) so each person sees only their rows.
-            // Fall back to ALL roles (full dataset) when no role matches,
-            // e.g. admins/overview users not named in the RLS roles.
             roles: (() => {
               const u = session.user;
               const emailLocal = u.email?.split("@")[0]?.toLowerCase();
               const givenName = u.name?.split(" ")[0]?.toLowerCase();
               const matched = rlsRoles.find((role) => {
                 const r = role.toLowerCase();
-                // Exact match on email local-part or given name.
                 if (r === emailLocal || r === givenName) return true;
-                // Prefix match: "Haris" matches "Harish", "Saurabh" matches "SaurabhR", etc.
                 if (givenName && (givenName.startsWith(r) || r.startsWith(givenName))) return true;
                 if (emailLocal && (emailLocal.startsWith(r) || r.startsWith(emailLocal))) return true;
                 return false;
@@ -160,7 +143,7 @@ export async function POST(request: Request) {
           }
         : undefined;
 
-    // Request the embed token scoped to this specific report/dataset.
+    // Generate the embed token using the user's own access token.
     const tokenRes = await fetch(
       `${POWERBI_API_BASE}/groups/${groupId}/reports/${targetReportId}/GenerateToken`,
       {
