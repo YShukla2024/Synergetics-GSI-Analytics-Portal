@@ -25,7 +25,7 @@ const spTokenCache = new Map<string, { token: string; expiresAt: number }>();
 let reportMetaCache: { datasetId: string; fetchedAt: number } | null = null;
 
 /** Gets a service principal access token for Power BI (cached ~55 min). */
-async function getServicePrincipalToken(): Promise<string> {
+export async function getServicePrincipalToken(): Promise<string> {
   const tenantId = process.env.AZURE_TENANT_ID;
   const clientId = process.env.AZURE_CLIENT_ID;
   const clientSecret = process.env.AZURE_CLIENT_SECRET;

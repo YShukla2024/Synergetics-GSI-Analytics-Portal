@@ -1,52 +1,23 @@
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { getServicePrincipalToken } from "@/lib/powerbi-user";
 
 /**
  * POST /api/powerbi-embed-token
- * Uses getToken() — the same proven approach as middleware — to read the
- * session. The encrypted JWT is decrypted by next-auth using AUTH_SECRET,
- * and the refresh token inside is exchanged for a Power BI scoped token.
+ *
+ * Uses the SERVICE PRINCIPAL (client_credentials) to authenticate with
+ * Power BI — the same token that lib/powerbi-user.ts uses for DAX queries.
+ * The signed-in user's email is passed as effectiveIdentity for RLS.
+ * This avoids requiring Power BI Pro licenses for individual users.
  */
 
-const POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/Dataset.Read.All";
 const POWERBI_API_BASE = "https://api.powerbi.com/v1.0/myorg";
-
-async function getUserPowerBIToken(refreshToken: string): Promise<string> {
-  const tenantId = process.env.AZURE_TENANT_ID;
-  const clientId = process.env.AZURE_CLIENT_ID;
-  const clientSecret = process.env.AZURE_CLIENT_SECRET;
-
-  if (!tenantId || !clientId || !clientSecret) {
-    throw new Error("Missing AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET env vars.");
-  }
-
-  const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      scope: POWERBI_SCOPE,
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Power BI token refresh failed (${res.status}): ${detail}`);
-  }
-
-  const json = (await res.json()) as { access_token: string };
-  return json.access_token;
-}
 
 export async function POST(request: Request) {
   console.log("[embed-token] Request received");
 
   try {
-    // Use the same getToken() that middleware uses — it decrypts the
-    // encrypted session cookie correctly.
+    // Authenticate the user session
     const jwt = await getToken({
       req: request as any,
       secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
@@ -55,22 +26,11 @@ export async function POST(request: Request) {
 
     if (!jwt) {
       console.log("[embed-token] No session found via getToken()");
-      return NextResponse.json(
-        { error: "No refresh token available. Please sign in again." },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    const refreshToken = jwt.refreshToken as string | undefined;
-    if (!refreshToken) {
-      console.log("[embed-token] Session found but no refreshToken. Email:", jwt.email);
-      return NextResponse.json(
-        { error: "No refresh token available. Please sign in again." },
-        { status: 401 }
-      );
-    }
-
-    console.log("[embed-token] User:", jwt.email);
+    const userEmail = (jwt.email as string) ?? "";
+    console.log("[embed-token] User:", userEmail);
 
     const { workspaceId, reportId } = (await request.json().catch(() => ({}))) as {
       workspaceId?: string;
@@ -84,40 +44,55 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "workspaceId and reportId are required." }, { status: 400 });
     }
 
-    console.log("[embed-token] Exchanging refresh token for Power BI token...");
-    const aadToken = await getUserPowerBIToken(refreshToken);
+    // Use the service principal token (client_credentials) — same as DAX queries
+    console.log("[embed-token] Getting service principal token...");
+    const spToken = await getServicePrincipalToken();
 
     console.log("[embed-token] Fetching report metadata...");
     const reportRes = await fetch(`${POWERBI_API_BASE}/groups/${groupId}/reports/${targetReportId}`, {
-      headers: { Authorization: `Bearer ${aadToken}` },
+      headers: { Authorization: `Bearer ${spToken}` },
     });
     if (!reportRes.ok) {
       const detail = await reportRes.text();
       console.error("[embed-token] Report metadata failed:", reportRes.status, detail);
-      return NextResponse.json({ error: `Failed to fetch report metadata (${reportRes.status}): ${detail}` }, { status: 502 });
+      return NextResponse.json(
+        { error: `Failed to fetch report metadata (${reportRes.status}): ${detail}` },
+        { status: 502 }
+      );
     }
     const report = (await reportRes.json()) as { embedUrl: string; datasetId: string; id: string };
 
-    const rlsRoles = (process.env.POWERBI_RLS_ROLES ?? "").split(",").map((r) => r.trim()).filter(Boolean);
-    const userIdentity = rlsRoles.length > 0
-      ? { username: jwt.email ?? jwt.name ?? "", datasets: [report.datasetId], roles: rlsRoles }
-      : undefined;
+    // RLS identity — the user's email tells Power BI which RLS role to apply
+    const rlsRoles = (process.env.POWERBI_RLS_ROLES ?? "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+    const userIdentity =
+      rlsRoles.length > 0
+        ? { username: userEmail, datasets: [report.datasetId], roles: rlsRoles }
+        : undefined;
 
     console.log("[embed-token] Generating embed token...");
-    const tokenRes = await fetch(`${POWERBI_API_BASE}/groups/${groupId}/reports/${targetReportId}/GenerateToken`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${aadToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accessLevel: "View",
-        datasets: [{ id: report.datasetId }],
-        reports: [{ allowEdit: false, id: report.id }],
-        ...(userIdentity ? { identities: [userIdentity] } : {}),
-      }),
-    });
+    const tokenRes = await fetch(
+      `${POWERBI_API_BASE}/groups/${groupId}/reports/${targetReportId}/GenerateToken`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${spToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessLevel: "View",
+          datasets: [{ id: report.datasetId }],
+          reports: [{ allowEdit: false, id: report.id }],
+          ...(userIdentity ? { identities: [userIdentity] } : {}),
+        }),
+      }
+    );
     if (!tokenRes.ok) {
       const detail = await tokenRes.text();
       console.error("[embed-token] GenerateToken failed:", tokenRes.status, detail);
-      return NextResponse.json({ error: `Failed to generate embed token (${tokenRes.status}): ${detail}` }, { status: 502 });
+      return NextResponse.json(
+        { error: `Failed to generate embed token (${tokenRes.status}): ${detail}` },
+        { status: 502 }
+      );
     }
     const tokenJson = (await tokenRes.json()) as { token: string; expiration: string };
 
