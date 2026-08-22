@@ -22,19 +22,22 @@ jobs:
           npm ci
           npm run build
 
-      - name: Prepare deployment package
+      - name: Create deployment package
         run: |
-          # Copy standalone output to root
-          cp -r .next/standalone/* .
-          # Copy static assets
-          cp -r .next/static .next/standalone/.next/static 2>/dev/null || cp -r .next/static .next/static
-          # Copy public folder
-          cp -r public .next/standalone/public 2>/dev/null || true
+          mkdir deploy
+          cp -r .next/standalone/* deploy/
+          mkdir -p deploy/.next/static
+          cp -r .next/static/* deploy/.next/static/
+          cp -r public deploy/public 2>/dev/null || true
+          cp server.js deploy/server.js 2>/dev/null || true
+          cp web.config deploy/web.config 2>/dev/null || true
+          cd deploy && tar -czf ../deploy.tar.gz .
+          echo "Package size: $(du -sh ../deploy.tar.gz | cut -f1)"
 
       - name: Deploy to Azure
         uses: Azure/webapps-deploy@v3
         with:
           app-name: 'Synergetics-Microsoft-Analytics-Portal'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0095E1FC38B846EC8D21FE54A819E02F }}
-          package: .
+          package: deploy
           restart: true
