@@ -11,21 +11,25 @@ const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   createServer(async (req, res) => {
-    // Strip iisnode named pipe prefix from URL
-    if (req.url && req.url.includes('/pipe/')) {
-      const match = req.url.match(/\/pipe\/[a-f0-9-]+(\/.*)/);
-      if (match) {
-        req.url = match[1];
+    // iisnode named pipe prefix: /pipe/<uuid>/...
+    // Override req.url getter to strip it so Next.js sees clean URLs
+    const rawUrl = req.url;
+    if (rawUrl && rawUrl.startsWith('/pipe/')) {
+      const slashIdx = rawUrl.indexOf('/', 7);
+      if (slashIdx !== -1) {
+        const cleanUrl = rawUrl.substring(slashIdx);
+        Object.defineProperty(req, 'url', {
+          get: () => cleanUrl,
+          configurable: true,
+          enumerable: true,
+        });
       }
     }
-    // Also strip x-iisnode-pipeheader if present
-    if (req.headers['x-iisnode-pipe']) {
-      delete req.headers['x-iisnode-pipe'];
-    }
     try {
-      await handle(req, res, parse(req.url, true));
+      const parsedUrl = parse(req.url, true);
+      await handle(req, res, parsedUrl);
     } catch (err) {
-      console.error('Error:', err);
+      console.error('Request error:', err);
       res.statusCode = 500;
       res.end('Internal Server Error');
     }
