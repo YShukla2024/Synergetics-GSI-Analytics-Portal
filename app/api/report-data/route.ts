@@ -52,7 +52,7 @@ export async function GET(request: Request) {
 
   try {
     if (url.searchParams.has("schema")) {
-      if (!canAccess(jwt.accessLevel as string, "analyst")) {
+      if (!canAccess(jwt.accessLevel, "analyst")) {
         return NextResponse.json({ error: "Forbidden — your access level cannot view analytics." }, { status: 403 });
       }
       const [columnsRaw, measuresRaw] = await Promise.all([
