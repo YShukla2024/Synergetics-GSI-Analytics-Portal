@@ -24,6 +24,7 @@ declare module "next-auth" {
        */
       accessLevel?: AccessLevel | null;
     } & DefaultSession["user"];
+    /** Deliberately NO refreshToken here — Session is exposed to the browser. */
   }
 
   interface User {
@@ -33,6 +34,8 @@ declare module "next-auth" {
     preferredUsername?: string | null;
     /** Azure AD tenant (directory) ID the user belongs to. */
     tenantId?: string | null;
+    /** OAuth refresh token captured at sign-in — server-only, used in jwt callback. */
+    refreshToken?: string;
     /** Local portal accounts only (viewer / analyst / admin). */
     accessLevel?: AccessLevel;
   }
