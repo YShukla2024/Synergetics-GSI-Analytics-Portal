@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { getToken } from "next-auth/jwt";
 import { canAccess } from "@/lib/access";
 
 /**
@@ -10,11 +9,6 @@ import { canAccess } from "@/lib/access";
  * OAuth refresh token (delegated access). This avoids needing
  * service-principal Application permissions, which Power BI doesn't
  * expose for Dataset.Read.All.
- *
- * The user's refresh token (stored in the JWT) is redeemed for a
- * Power BI scoped access token, which is then used to fetch report
- * metadata and generate the embed token. RLS is enforced via
- * effectiveIdentity.
  * ------------------------------------------------------------------
  */
 
@@ -83,14 +77,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Get the raw JWT to access the refresh token (not exposed in session).
-    const token = await getToken({
-      req: request as any,
-      secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
-      secureCookie: true,
-    });
-
-    const refreshToken = (token as any)?.refreshToken;
+    const refreshToken = session.user.refreshToken;
 
     if (!refreshToken) {
       return NextResponse.json(

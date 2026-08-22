@@ -23,6 +23,8 @@ declare module "next-auth" {
        * Microsoft Entra sessions, which keep unrestricted access.
        */
       accessLevel?: AccessLevel | null;
+      /** OAuth refresh token (server-only — redeemed for Power BI tokens). */
+      refreshToken?: string;
     } & DefaultSession["user"];
   }
 
@@ -33,10 +35,7 @@ declare module "next-auth" {
     preferredUsername?: string | null;
     /** Azure AD tenant (directory) ID the user belongs to. */
     tenantId?: string | null;
-    /**
-     * Entra refresh token captured at sign-in (ROPC credentials flow).
-     * Server-only — copied into the JWT, never exposed to the client.
-     */
+    /** Entra refresh token captured at sign-in (ROPC credentials flow). */
     refreshToken?: string;
     /** Local portal accounts only (viewer / analyst / admin). */
     accessLevel?: AccessLevel;

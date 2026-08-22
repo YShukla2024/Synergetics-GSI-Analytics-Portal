@@ -311,6 +311,7 @@ export const authConfig = {
         session.user.tenantId = token.tenantId as string | undefined;
         session.user.roles = (token.roles as PortalRole[] | undefined) ?? [];
         session.user.accessLevel = token.accessLevel as AccessLevel | undefined;
+        session.user.refreshToken = token.refreshToken as string | undefined;
       }
       return session;
     },
