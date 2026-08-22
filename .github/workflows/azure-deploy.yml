@@ -1,0 +1,20 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy source to Azure via ZIP
+        uses: Azure/webapps-deploy@v3
+        with:
+          app-name: 'Synergetics-Microsoft-Analytics-Portal'
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0095E1FC38B846EC8D21FE54A819E02F }}
+          package: .
+          restart: true
