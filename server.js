@@ -11,9 +11,13 @@ const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   createServer(async (req, res) => {
+    // Strip iisnode named pipe prefix from URL
+    if (req.url && req.url.includes('/pipe/')) {
+      const match = req.url.match(/\/pipe\/[a-f0-9-]+(\/.*)/);
+      if (match) req.url = match[1];
+    }
     try {
-      const parsedUrl = parse(req.url, true);
-      await handle(req, res, parsedUrl);
+      await handle(req, res, parse(req.url, true));
     } catch (err) {
       console.error('Error:', err);
       res.statusCode = 500;
