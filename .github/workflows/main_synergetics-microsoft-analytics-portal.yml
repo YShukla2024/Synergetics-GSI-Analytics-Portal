@@ -25,23 +25,24 @@ jobs:
         run: |
           npm ci
           npm run build
-        env:
-          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
-      - name: Prepare standalone output
-        run: |
-          cp -r .next/static .next/standalone/.next/static
-          cp -r public .next/standalone/public 2>/dev/null || true
-          cp web.config .next/standalone/web.config
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .next/standalone
+          path: |
+            .next
+            node_modules
+            package.json
+            app
+            components
+            lib
+            data
+            middleware.ts
+            auth.config.ts
+            auth.ts
+            types
+            public
 
   deploy:
     runs-on: ubuntu-latest
@@ -60,4 +61,5 @@ jobs:
           app-name: 'Synergetics-Microsoft-Analytics-Portal'
           slot-name: 'Production'
           package: .
+          restart: true
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0095E1FC38B846EC8D21FE54A819E02F }}
