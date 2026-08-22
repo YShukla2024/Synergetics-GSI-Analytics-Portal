@@ -22,22 +22,14 @@ jobs:
           npm ci
           npm run build
 
-      - name: Create deployment package
+      - name: Create deployment zip (no node_modules)
         run: |
-          mkdir deploy
-          cp -r .next/standalone/* deploy/
-          mkdir -p deploy/.next/static
-          cp -r .next/static/* deploy/.next/static/
-          cp -r public deploy/public 2>/dev/null || true
-          cp server.js deploy/server.js 2>/dev/null || true
-          cp web.config deploy/web.config 2>/dev/null || true
-          cd deploy && tar -czf ../deploy.tar.gz .
-          echo "Package size: $(du -sh ../deploy.tar.gz | cut -f1)"
+          zip -r deploy.zip . -x "node_modules/*" -x ".git/*" -x ".next/cache/*"
 
       - name: Deploy to Azure
         uses: Azure/webapps-deploy@v3
         with:
           app-name: 'Synergetics-Microsoft-Analytics-Portal'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0095E1FC38B846EC8D21FE54A819E02F }}
-          package: deploy
+          package: deploy.zip
           restart: true

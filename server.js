@@ -1,4 +1,5 @@
 const { createServer } = require('http');
+const { parse } = require('url');
 const next = require('next');
 
 const dev = false;
@@ -10,8 +11,15 @@ const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
   createServer(async (req, res) => {
-    await handle(req, res);
-  }).listen(port, () => {
+    try {
+      const parsedUrl = parse(req.url, true);
+      await handle(req, res, parsedUrl);
+    } catch (err) {
+      console.error('Error:', err);
+      res.statusCode = 500;
+      res.end('Internal Server Error');
+    }
+  }).listen(port, hostname, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
   });
 });
