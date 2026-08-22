@@ -8,14 +8,19 @@ async function stripPipePrefix(req: NextRequest): Promise<NextRequest> {
     if (slashIdx !== -1) {
       const newUrl = new URL(req.url);
       newUrl.pathname = pathname.substring(slashIdx);
-      // Reconstructing NextRequest from another Request doesn't reliably
-      // forward the body (needed for POST /api/auth/signin's CSRF token) —
-      // read it explicitly instead.
-      const init: RequestInit = { method: req.method, headers: req.headers };
+      // Read the body explicitly before constructing a new NextRequest,
+      // because NextRequest from another Request doesn't reliably forward
+      // the body (needed for POST /api/auth/signin's CSRF token).
+      const headers = new Headers(req.headers);
       if (req.method !== "GET" && req.method !== "HEAD") {
-        init.body = await req.arrayBuffer();
+        const body = await req.arrayBuffer();
+        return new NextRequest(newUrl, {
+          method: req.method,
+          headers,
+          body,
+        });
       }
-      return new NextRequest(newUrl, init);
+      return new NextRequest(newUrl, { method: req.method, headers });
     }
   }
   return req;
