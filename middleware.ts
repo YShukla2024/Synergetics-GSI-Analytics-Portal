@@ -3,8 +3,10 @@
  *
  * Strips the iisnode named-pipe prefix (/pipe/<uuid>) from URLs on Windows
  * Azure App Service so all downstream path checks and redirects use clean paths.
+ *
+ * Uses getToken() directly instead of the auth() wrapper to avoid the wrapper
+ * processing the pipe-prefixed URL and generating broken redirect URLs.
  */
-import { auth } from "@/auth";
 import { getToken } from "next-auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
 import { canAccess } from "@/lib/access";
@@ -27,51 +29,54 @@ function cleanPathname(nextUrl: URL): URL {
   return nextUrl;
 }
 
-export default auth(async (req) => {
+export default async function middleware(req: NextRequest) {
   const nextUrl = cleanPathname(req.nextUrl);
 
-  // Read the JWT directly so the access level (set at sign-in) is available
-  // here without depending on session-callback mapping.
   const token = await getToken({
     req,
     secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
   });
 
-  if (!token) {
-    // API routes: respond with 401 JSON instead of a redirect.
-    if (nextUrl.pathname.startsWith("/api/")) {
+  // API routes: 401 JSON if not authenticated.
+  if (nextUrl.pathname.startsWith("/api/")) {
+    if (!token) {
       return NextResponse.json({ error: "Unauthorized — sign in to continue." }, { status: 401 });
     }
 
-    // Pages: bounce to the sign-in page, remembering where they came from.
-    const loginUrl = new URL("/login", nextUrl);
+    // Analytics backing APIs: embed tokens require analyst+.
+    if (nextUrl.pathname.startsWith("/api/powerbi-embed-token")) {
+      const level = token.accessLevel;
+      if (!canAccess(level, "analyst")) {
+        return NextResponse.json(
+          { error: "Forbidden — your access level cannot view analytics." },
+          { status: 403 }
+        );
+      }
+    }
+
+    return NextResponse.next();
+  }
+
+  // Page routes: redirect to login if no session.
+  if (!token) {
+    const loginUrl = new URL("/login", nextUrl.origin);
     loginUrl.searchParams.set("callbackUrl", nextUrl.pathname + nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 
+  // Page gating for local portal accounts (Entra users → level undefined → unrestricted).
   const level = token.accessLevel;
   const path = nextUrl.pathname;
 
-  // Page gating for local portal accounts (Entra users → level undefined →
-  // canAccess returns true, so nothing changes for them).
   if (path.startsWith("/analytics") && !canAccess(level, "analyst")) {
-    return NextResponse.redirect(new URL("/dashboard", nextUrl));
+    return NextResponse.redirect(new URL("/dashboard", nextUrl.origin));
   }
   if (path.startsWith("/settings") && !canAccess(level, "admin")) {
-    return NextResponse.redirect(new URL("/dashboard", nextUrl));
-  }
-
-  // Analytics backing APIs: embed tokens require analyst+ (the dashboard's
-  // /api/report-data stays open to all authenticated users).
-  if (path.startsWith("/api/powerbi-embed-token") && !canAccess(level, "analyst")) {
-    return NextResponse.json(
-      { error: "Forbidden — your access level cannot view analytics." },
-      { status: 403 }
-    );
+    return NextResponse.redirect(new URL("/dashboard", nextUrl.origin));
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: [
