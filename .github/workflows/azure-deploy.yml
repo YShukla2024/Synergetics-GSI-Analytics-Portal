@@ -11,7 +11,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy source to Azure via ZIP
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install and Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Prepare deployment package
+        run: |
+          # Copy standalone output to root
+          cp -r .next/standalone/* .
+          # Copy static assets
+          cp -r .next/static .next/standalone/.next/static 2>/dev/null || cp -r .next/static .next/static
+          # Copy public folder
+          cp -r public .next/standalone/public 2>/dev/null || true
+
+      - name: Deploy to Azure
         uses: Azure/webapps-deploy@v3
         with:
           app-name: 'Synergetics-Microsoft-Analytics-Portal'
