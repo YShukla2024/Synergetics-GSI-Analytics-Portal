@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 import { canAccess } from "@/lib/access";
-import { getSessionFromRequest } from "@/lib/auth-cookies";
 import {
   executeDaxQuery,
   firstScalar,
@@ -11,10 +11,7 @@ import {
 
 /**
  * GET /api/report-data
- * ---------------------------------------------------------------------------
- * Live numbers straight from the "MS-GSI-Report" semantic model, queried as
- * the signed-in user (Power BI enforces RLS automatically — owners see all,
- * RLS-role members see only their rows).
+ * Live numbers from the Power BI semantic model, queried as the signed-in user.
  */
 
 function rowsOf(response: unknown): Record<string, unknown>[] {
@@ -39,18 +36,18 @@ function summarizeSchema(columnsRaw: unknown, measuresRaw: unknown) {
 export async function GET(request: Request) {
   console.log("[report-data] Request received");
 
-  const session = await getSessionFromRequest(request);
-  if (!session) {
-    console.log("[report-data] No session found — returning 401");
+  const jwt = await getToken({
+    req: request as any,
+    secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
+    secureCookie: true,
+  });
+
+  if (!jwt) {
+    console.log("[report-data] No session found via getToken()");
     return NextResponse.json({ error: "Unauthorized — sign in to continue." }, { status: 401 });
   }
 
-  // Build a jwt-like object for executeDaxQuery and canAccess
-  const jwt = {
-    email: session.email,
-    accessLevel: session.accessLevel,
-  } as Record<string, unknown>;
-
+  console.log("[report-data] User:", jwt.email);
   const url = new URL(request.url);
 
   try {
