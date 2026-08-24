@@ -41,17 +41,35 @@ function matchRole(
   userEmail: string,
   jwtName?: string | null,
 ): string | null {
-  // Try matching by email prefix (first name before @)
+  // Email prefix: e.g. "RamA" from "RamA@synergetics-india.com"
   const emailPrefix = userEmail.split("@")[0]?.toLowerCase() ?? "";
-  // Try matching by JWT name first word
+  // JWT display name first word: e.g. "ram" from "Ram Arunachalam"
   const nameFirst = jwtName?.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
 
+  // Exact match first (handles "ram" == "ram")
   for (const role of roles) {
     const roleName = role.name.toLowerCase();
     if (roleName === emailPrefix || roleName === nameFirst) {
-      return role.name; // Return exact casing from Power BI
+      return role.name;
     }
   }
+
+  // Prefix match: "rama" starts with "ram", "harishs" starts with "haris"
+  for (const role of roles) {
+    const roleName = role.name.toLowerCase();
+    if (emailPrefix.startsWith(roleName) || nameFirst.startsWith(roleName)) {
+      return role.name;
+    }
+  }
+
+  // Substring fallback: role name appears anywhere in the email prefix
+  for (const role of roles) {
+    const roleName = role.name.toLowerCase();
+    if (emailPrefix.includes(roleName) || nameFirst.includes(roleName)) {
+      return role.name;
+    }
+  }
+
   return null;
 }
 
